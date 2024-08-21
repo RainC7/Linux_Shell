@@ -41,6 +41,8 @@ install_dependencies() {
     esac
 }
 
+echo "系统类型：$OS"
+echo "V2024.08.22 0130"
 # 提示用户输入Python版本号
 read -p "请输入要安装的Python版本号（例如3.12.5）: " version
 
