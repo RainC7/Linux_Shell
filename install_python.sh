@@ -29,9 +29,9 @@ install_dependencies() {
             sudo yum groupinstall -y "Development Tools"
             sudo yum install -y zlib-devel bzip2-devel openssl-devel ncurses-devel sqlite-devel readline-devel tk-devel gdbm-devel db4-devel libpcap-devel xz-devel expat-devel
             if [ "$VER" == "8" ]; then
-                sudo dnf install -y libffi-devel openssl-devel
+                sudo dnf install -y libffi-devel
             else
-                sudo yum install -y libffi-devel openssl-devel
+                sudo yum install -y libffi-devel
             fi
             ;;
         *)
@@ -41,8 +41,36 @@ install_dependencies() {
     esac
 }
 
-echo "系统类型：$OS"
-echo "V2024.08.22 0130"
+# 检查并更新 OpenSSL
+check_and_update_openssl() {
+    echo "检查 OpenSSL 版本..."
+    openssl_version=$(openssl version | awk '{print $2}')
+    required_version="1.1.1"
+
+    if [[ "$(printf '%s\n' "$required_version" "$openssl_version" | sort -V | head -n1)" != "$required_version" ]]; then
+        echo "系统 OpenSSL 版本 ($openssl_version) 太旧。正在编译新版本..."
+        
+        wget https://www.openssl.org/source/openssl-1.1.1k.tar.gz
+        tar -xzvf openssl-1.1.1k.tar.gz
+        cd openssl-1.1.1k
+        ./config --prefix=/usr/local/openssl --openssldir=/usr/local/openssl shared zlib
+        make
+        sudo make install
+        cd ..
+        
+        export LD_LIBRARY_PATH=/usr/local/openssl/lib:$LD_LIBRARY_PATH
+        export CPPFLAGS="-I/usr/local/openssl/include"
+        export LDFLAGS="-L/usr/local/openssl/lib"
+    else
+        echo "系统 OpenSSL 版本 ($openssl_version) 满足要求。"
+    fi
+}
+
+
+echo "Python 一键安装脚本"
+echo "By Lynn"
+echo "Version 2408220145"
+echo "系统版本：$OS"
 # 提示用户输入Python版本号
 read -p "请输入要安装的Python版本号（例如3.12.5）: " version
 
@@ -60,6 +88,9 @@ python_url="https://registry.npmmirror.com/-/binary/python/$version/Python-$vers
 
 # 安装依赖包
 install_dependencies
+
+# 检查并更新 OpenSSL
+check_and_update_openssl
 
 # 下载Python源码包
 echo "正在下载Python $version ..."
@@ -99,7 +130,7 @@ fi
 
 # 配置Python
 echo "配置Python..."
-if ! ./configure --prefix="$install_dir" --enable-optimizations --with-ensurepip=install; then
+if ! ./configure --prefix="$install_dir" --enable-optimizations --with-ensurepip=install --with-openssl=/usr/local/openssl; then
   echo "配置Python失败！"
   exit 1
 fi
