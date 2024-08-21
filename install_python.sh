@@ -29,9 +29,9 @@ install_dependencies() {
             sudo yum groupinstall -y "Development Tools"
             sudo yum install -y zlib-devel bzip2-devel openssl-devel ncurses-devel sqlite-devel readline-devel tk-devel gdbm-devel db4-devel libpcap-devel xz-devel expat-devel
             if [ "$VER" == "8" ]; then
-                sudo dnf install -y libffi-devel
+                sudo dnf install -y libffi-devel openssl-devel
             else
-                sudo yum install -y libffi-devel
+                sudo yum install -y libffi-devel openssl-devel
             fi
             ;;
         *)
@@ -44,7 +44,7 @@ install_dependencies() {
 # 提示用户输入Python版本号
 read -p "请输入要安装的Python版本号（例如3.12.5）: " version
 
-# 检查输入的版本号是否合法（这里简单地检查是否有三个点号分隔的数字）
+# 检查输入的版本号是否合法
 if [[ ! $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   echo "无效的版本号格式！请使用X.Y.Z格式的版本号。"
   exit 1
@@ -59,7 +59,7 @@ python_url="https://registry.npmmirror.com/-/binary/python/$version/Python-$vers
 # 安装依赖包
 install_dependencies
 
-# 下载Python二进制安装包
+# 下载Python源码包
 echo "正在下载Python $version ..."
 if ! wget --no-check-certificate "$python_url" -P /tmp/; then
   echo "下载Python安装包失败！"
@@ -76,19 +76,40 @@ fi
 # 进入解压后的目录
 cd "/tmp/Python-$version"
 
-# 配置、编译和安装Python
+# 修改 Modules/Setup 文件
+echo "修改 Modules/Setup 文件..."
+
+# 询问用户是否要静态链接 OpenSSL
+read -p "是否要静态链接 OpenSSL? (y/n): " static_ssl
+
+if [ "$static_ssl" = "y" ]; then
+    # 静态链接 OpenSSL
+    sed -i 's/^#_ssl/_ssl/g' Modules/Setup
+    sed -i 's/^#_hashlib/_hashlib/g' Modules/Setup
+    sed -i 's/^#\(.*\)-l:libssl.a/\1-l:libssl.a/g' Modules/Setup
+    sed -i 's/^#\(.*\)-l:libcrypto.a/\1-l:libcrypto.a/g' Modules/Setup
+else
+    # 动态链接 OpenSSL（默认选项）
+    sed -i 's/^#_ssl/_ssl/g' Modules/Setup
+    sed -i 's/^#_hashlib/_hashlib/g' Modules/Setup
+    sed -i 's/^#\(.*\)$(OPENSSL_LIBS)/\1$(OPENSSL_LIBS)/g' Modules/Setup
+fi
+
+# 配置Python
 echo "配置Python..."
-if ! ./configure --prefix="$install_dir" --enable-optimizations --with-ensurepip=install --with-ssl; then
+if ! ./configure --prefix="$install_dir" --enable-optimizations --with-ensurepip=install; then
   echo "配置Python失败！"
   exit 1
 fi
 
+# 编译Python
 echo "编译Python..."
 if ! make -j "$(nproc)"; then
   echo "编译Python失败！"
   exit 1
 fi
 
+# 安装Python
 echo "安装Python..."
 if ! sudo make altinstall; then
   echo "安装Python失败！"
@@ -100,7 +121,7 @@ rm -rf "/tmp/Python-$version" "/tmp/Python-$version.tgz"
 
 echo "Python $version 已成功安装到 $install_dir 目录。"
 
-# 创建快捷方式到/usr/local/bin，将python版本映射到python3
+# 创建快捷方式到/usr/local/bin
 echo "创建Python $version 快捷方式到/usr/local/bin..."
 if [[ $version == "2."* ]]; then
   link_name="python2"
@@ -117,6 +138,11 @@ echo "快捷方式已创建。"
 
 # 验证SSL支持
 echo "验证SSL支持..."
-"$install_dir/bin/$link_name" -c "import ssl; print(ssl.OPENSSL_VERSION)"
+if "$install_dir/bin/$link_name" -c "import ssl; print(ssl.OPENSSL_VERSION)"; then
+    echo "SSL 支持已成功启用"
+else
+    echo "SSL 支持验证失败，请检查安装"
+    exit 1
+fi
 
 echo "安装完成。"
