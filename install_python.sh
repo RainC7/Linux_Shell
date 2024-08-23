@@ -16,6 +16,20 @@ print_color() {
     echo -e "${color}${message}${NC}"
 }
 
+# 打印分割线
+print_separator() {
+    print_color $CYAN "----------------------------------------"
+}
+
+# 检查是否在中国大陆
+check_if_in_china() {
+    if curl -s https://ipapi.co/country_code | grep -q 'CN'; then
+        return 0
+    else
+        return 1
+    fi
+}
+
 # 获取系统信息
 get_system_info() {
     if [ -f /etc/os-release ]; then
@@ -33,16 +47,16 @@ get_system_info() {
         OS=$(uname -s)
         VER=$(uname -r)
     fi
-    echo "$OS $VER"
+    echo -e "${GREEN}$OS${NC} ${YELLOW}$VER${NC}"
 }
 
 # 获取Python版本
 get_python_version() {
     python_version=$(python3 --version 2>&1)
     if [ $? -ne 0 ]; then
-        echo "未安装"
+        echo -e "${RED}未安装${NC}"
     else
-        echo "$python_version"
+        echo -e "${GREEN}$python_version${NC}"
     fi
 }
 
@@ -50,19 +64,62 @@ get_python_version() {
 get_openssl_version() {
     openssl_version=$(openssl version 2>&1)
     if [ $? -ne 0 ]; then
-        echo "未安装"
+        echo -e "${RED}未安装${NC}"
     else
-        echo "$openssl_version"
+        echo -e "${GREEN}$openssl_version${NC}"
     fi
 }
 
 # 检查SSL连接状态
 check_ssl_connection() {
     if python3 -c "import ssl; ssl.create_default_context().wrap_socket(ssl.socket())" 2>/dev/null; then
-        echo "正常"
+        echo -e "${GREEN}正常${NC}"
     else
-        echo "异常"
+        echo -e "${RED}异常${NC}"
     fi
+}
+
+# 检查网络连接
+check_network() {
+    print_color $YELLOW "检查网络连接..."
+    if ping -c 1 www.google.com &> /dev/null || ping -c 1 www.baidu.com &> /dev/null; then
+        print_color $GREEN "网络连接正常"
+        return 0
+    else
+        print_color $RED "网络连接异常"
+        return 1
+    fi
+}
+
+# 下载文件的函数，带有重试和备用源
+download_with_retry() {
+    local url=$1
+    local output=$2
+    local backup_url=$3
+    local max_retries=3
+    local retry_count=0
+
+    while [ $retry_count -lt $max_retries ]; do
+        if wget --no-check-certificate "$url" -O "$output"; then
+            print_color $GREEN "下载成功: $output"
+            return 0
+        else
+            retry_count=$((retry_count+1))
+            print_color $YELLOW "下载失败，尝试重试 ($retry_count/$max_retries)"
+            sleep 5
+        fi
+    done
+
+    if [ -n "$backup_url" ]; then
+        print_color $YELLOW "尝试使用备用下载源"
+        if wget --no-check-certificate "$backup_url" -O "$output"; then
+            print_color $GREEN "从备用源下载成功: $output"
+            return 0
+        fi
+    fi
+
+    print_color $RED "下载失败: $output"
+    return 1
 }
 
 # 安装依赖包
@@ -100,9 +157,11 @@ check_and_update_openssl() {
 
     if [[ "$(printf '%s\n' "$required_version" "$current_openssl_version" | sort -V | head -n1)" == "$required_version" ]]; then
         print_color $GREEN "当前 OpenSSL 版本满足最低要求。"
+        print_separator
         read -p "$(print_color $PURPLE '是否仍要安装新版本的 OpenSSL? (y/n): ')" install_new_openssl
     else
         print_color $YELLOW "当前 OpenSSL 版本不满足最低要求。"
+        print_separator
         read -p "$(print_color $PURPLE '是否要安装新版本的 OpenSSL? (y/n): ')" install_new_openssl
     fi
 
@@ -111,10 +170,12 @@ check_and_update_openssl() {
         return
     fi
 
+    print_separator
     print_color $YELLOW "OpenSSL 版本选择："
     print_color $BLUE "1) 最新版本 (3.3.1)"
     print_color $BLUE "2) 旧版本 (1.1.1i)"
     print_color $BLUE "3) 自定义版本"
+    print_separator
     read -p "$(print_color $PURPLE '请选择要安装的 OpenSSL 版本 (1/2/3): ')" openssl_choice
 
     case $openssl_choice in
@@ -135,6 +196,19 @@ check_and_update_openssl() {
 
     print_color $GREEN "准备安装 OpenSSL $openssl_version ..."
 
+    # 设置下载链接
+    if check_if_in_china; then
+        openssl_url="https://kkgithub.com/openssl/openssl/releases/download/openssl-$openssl_version/openssl-$openssl_version.tar.gz"
+    else
+        openssl_url="https://github.com/openssl/openssl/releases/download/openssl-$openssl_version/openssl-$openssl_version.tar.gz"
+    fi
+
+    # 下载 OpenSSL
+    if ! download_with_retry "$openssl_url" "/tmp/openssl-$openssl_version.tar.gz"; then
+        print_color $RED "下载 OpenSSL 失败，请检查网络连接或稍后重试。"
+        return 1
+    fi
+
     # 安装依赖
     case $OS in
         "Ubuntu"|"Debian")
@@ -147,9 +221,8 @@ check_and_update_openssl() {
             ;;
     esac
 
-    # 下载并解压 OpenSSL
-    cd /usr/local/src
-    wget https://www.openssl.org/source/openssl-$openssl_version.tar.gz
+    # 解压和安装 OpenSSL
+    cd /tmp
     tar -zxvf openssl-$openssl_version.tar.gz
     cd openssl-$openssl_version
 
@@ -168,7 +241,7 @@ check_and_update_openssl() {
     sudo ldconfig -v
 
     # 清理
-    cd /usr/local/src
+    cd /tmp
     rm -rf openssl-$openssl_version openssl-$openssl_version.tar.gz
 
     # 验证安装
@@ -176,158 +249,183 @@ check_and_update_openssl() {
     print_color $GREEN "OpenSSL 已更新到新版本: $new_openssl_version"
 }
 
-# 显示系统信息
-print_color $CYAN "========================================"
-print_color $CYAN "     Python 和 OpenSSL 一键安装脚本"
-print_color $CYAN "             By Lynn"
-print_color $CYAN "         Version 2408240019"
-print_color $CYAN "========================================"
+# 主要的脚本逻辑
+main() {
+    # 显示系统信息
+    print_color $CYAN "========================================"
+    print_color $CYAN "     Python 和 OpenSSL 一键安装脚本"
+    print_color $CYAN "             By Lynn"
+    print_color $CYAN "       Version v2.0-202408240030"
+    print_color $CYAN "========================================"
 
-print_color $YELLOW "系统信息:"
-print_color $GREEN "  操作系统: $(get_system_info)"
-print_color $GREEN "  Python版本: $(get_python_version)"
-print_color $GREEN "  OpenSSL版本: $(get_openssl_version)"
-print_color $GREEN "  SSL连接状态: $(check_ssl_connection)"
-echo
+    print_color $YELLOW "系统信息:"
+    echo -e "  操作系统: $(get_system_info)"
+    echo -e "  Python版本: $(get_python_version)"
+    echo -e "  OpenSSL版本: $(get_openssl_version)"
+    echo -e "  SSL连接状态: $(check_ssl_connection)"
+    
+    if check_if_in_china; then
+        print_color $YELLOW "检测到您可能在中国大陆，将使用替代下载源。"
+    fi
+    echo
 
-# 显示菜单
-print_color $YELLOW "请选择安装选项:"
-print_color $BLUE "1) 一键安装 Python 与 OpenSSL (使用默认配置)"
-print_color $BLUE "2) 仅安装 OpenSSL"
-print_color $BLUE "3) 自定义安装 Python"
-read -p "$(print_color $PURPLE '请输入选项 (1/2/3): ')" install_option
+    # 显示菜单
+    print_separator
+    print_color $YELLOW "请选择安装选项:"
+    print_color $BLUE "1) 一键安装 Python 与 OpenSSL (使用默认配置)"
+    print_color $BLUE "2) 仅安装 OpenSSL"
+    print_color $BLUE "3) 自定义安装 Python"
+    print_separator
+    read -p "$(print_color $PURPLE '请输入选项 (1/2/3): ')" install_option
 
-case $install_option in
-    1)
-        print_color $GREEN "您选择了一键安装 Python 与 OpenSSL (使用默认配置)"
-        # 设置默认值
-        openssl_version="3.3.1"
-        install_new_openssl="y"
-        static_ssl="n"
-        ;;
-    2)
-        print_color $GREEN "您选择了仅安装 OpenSSL"
-        ;;
-    3)
-        print_color $GREEN "您选择了自定义安装 Python"
-        ;;
-    *)
-        print_color $RED "无效的选项，退出程序"
-        exit 1
-        ;;
-esac
-
-# 根据用户选择执行相应的安装流程
-case $install_option in
-    1|3)
-        install_dependencies
-        check_and_update_openssl
-        # 提示用户输入Python版本号
-        read -p "$(print_color $PURPLE '请输入要安装的Python版本号（例如3.12.5）: ')" version
-
-        # 检查输入的版本号是否合法
-        if [[ ! $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-          print_color $RED "无效的版本号格式！请使用X.Y.Z格式的版本号。"
-          exit 1
-        fi
-
-        # 设置Python安装目录
-        install_dir="/usr/local/python$version"
-
-        # 设置Python安装包下载地址
-        python_url="https://registry.npmmirror.com/-/binary/python/$version/Python-$version.tgz"
-
-        # 下载Python源码包
-        print_color $YELLOW "正在下载Python $version ..."
-        if ! wget --no-check-certificate "$python_url" -P /tmp/; then
-          print_color $RED "下载Python安装包失败！"
-          exit 1
-        fi
-
-        # 解压安装包
-        print_color $YELLOW "解压安装包..."
-        if ! tar -xzvf "/tmp/Python-$version.tgz" -C /tmp/; then
-          print_color $RED "解压Python安装包失败！"
-          exit 1
-        fi
-
-        # 进入解压后的目录
-        cd "/tmp/Python-$version"
-
-        # 修改 Modules/Setup 文件
-        print_color $YELLOW "修改 Modules/Setup 文件..."
-
-        if [ "$install_option" == "3" ]; then
-            read -p "$(print_color $PURPLE '是否要静态链接 OpenSSL? (y/n): ')" static_ssl
-        fi
-
-        if [ "$static_ssl" = "y" ]; then
-            # 静态链接 OpenSSL
-            sed -i 's/^#_ssl/_ssl/g' Modules/Setup
-            sed -i 's/^#_hashlib/_hashlib/g' Modules/Setup
-            sed -i 's/^#\(.*\)-l:libssl.a/\1-l:libssl.a/g' Modules/Setup
-            sed -i 's/^#\(.*\)-l:libcrypto.a/\1-l:libcrypto.a/g' Modules/Setup
-        else
-            # 动态链接 OpenSSL（默认选项）
-            sed -i 's/^#_ssl/_ssl/g' Modules/Setup
-            sed -i 's/^#_hashlib/_hashlib/g' Modules/Setup
-            sed -i 's/^#\(.*\)$(OPENSSL_LIBS)/\1$(OPENSSL_LIBS)/g' Modules/Setup
-        fi
-
-        # 配置Python
-        print_color $YELLOW "配置Python..."
-        if ! ./configure --prefix="$install_dir" --enable-optimizations --with-ensurepip=install --with-openssl=/usr/local/openssl; then
-          print_color $RED "配置Python失败！"
-          exit 1
-        fi
-
-        # 编译Python
-        print_color $YELLOW "编译Python..."
-        if ! make -j "$(nproc)"; then
-          print_color $RED "编译Python失败！"
-          exit 1
-        fi
-
-        # 安装Python
-        print_color $YELLOW "安装Python..."
-        if ! sudo make altinstall; then
-          print_color $RED "安装Python失败！"
-          exit 1
-        fi
-
-        # 清理临时文件
-        rm -rf "/tmp/Python-$version" "/tmp/Python-$version.tgz"
-
-        print_color $GREEN "Python $version 已成功安装到 $install_dir 目录。"
-
-        # 创建快捷方式到/usr/local/bin
-        print_color $YELLOW "创建Python $version 快捷方式到/usr/local/bin..."
-        if [[ $version == "2."* ]]; then
-          link_name="python2"
-        else
-          link_name="python3"
-        fi
-
-        if ! sudo ln -s "$install_dir/bin/$link_name" "/usr/local/bin/python$version"; then
-          print_color $RED "创建快捷方式失败！"
-          exit 1
-        fi
-
-        print_color $GREEN "快捷方式已创建。"
-
-        # 验证SSL支持
-        print_color $YELLOW "验证SSL支持..."
-        if "$install_dir/bin/$link_name" -c "import ssl; print(ssl.OPENSSL_VERSION)"; then
-            print_color $GREEN "SSL 支持已成功启用"
-        else
-            print_color $RED "SSL 支持验证失败，请检查安装"
+    case $install_option in
+        1)
+            print_color $GREEN "您选择了一键安装 Python 与 OpenSSL (使用默认配置)"
+            # 设置默认值
+            openssl_version="3.3.1"
+            install_new_openssl="y"
+            static_ssl="n"
+            ;;
+        2)
+            print_color $GREEN "您选择了仅安装 OpenSSL"
+            ;;
+        3)
+            print_color $GREEN "您选择了自定义安装 Python"
+            ;;
+        *)
+            print_color $RED "无效的选项，退出程序"
             exit 1
-        fi
+            ;;
+    esac
 
-        print_color $GREEN "安装完成。"
-        ;;
-    2)
-        check_and_update_openssl
-        print_color $GREEN "OpenSSL 安装完成。"
-        ;;
-esac
+    # 检查网络连接
+    if ! check_network; then
+        print_color $RED "网络连接异常，无法继续安装。请检查您的网络连接后重试。"
+        exit 1
+    fi
+
+    # 根据用户选择执行相应的安装流程
+    case $install_option in
+        1|3)
+            install_dependencies
+            check_and_update_openssl
+            # 提示用户输入Python版本号
+            print_separator
+            read -p "$(print_color $PURPLE '请输入要安装的Python版本号（例如3.12.5）: ')" version
+
+            # 检查输入的版本号是否合法
+            if [[ ! $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                print_color $RED "无效的版本号格式！请使用X.Y.Z格式的版本号。"
+                exit 1
+            fi
+
+            # 设置Python安装目录
+            install_dir="/usr/local/python$version"
+
+            # 设置Python安装包下载地址
+            if check_if_in_china; then
+                python_url="https://kkgithub.com/python/cpython/archive/v$version.tar.gz"
+            else
+                python_url="https://github.com/python/cpython/archive/v$version.tar.gz"
+            fi
+            python_backup_url="https://www.python.org/ftp/python/$version/Python-$version.tgz"
+
+            # 下载Python源码包
+            print_color $YELLOW "正在下载Python $version ..."
+            if ! download_with_retry "$python_url" "/tmp/Python-$version.tgz" "$python_backup_url"; then
+                print_color $RED "无法下载Python安装包。请检查您的网络连接或稍后重试。"
+                exit 1
+            fi
+
+            # 解压安装包
+            print_color $YELLOW "解压安装包..."
+            if ! tar -xzvf "/tmp/Python-$version.tgz" -C /tmp/; then
+                print_color $RED "解压Python安装包失败！"
+                exit 1
+            fi
+
+            # 进入解压后的目录
+            cd "/tmp/Python-$version"
+
+            # 修改 Modules/Setup 文件
+            print_color $YELLOW "修改 Modules/Setup 文件..."
+
+            if [ "$install_option" == "3" ]; then
+                print_separator
+                read -p "$(print_color $PURPLE '是否要静态链接 OpenSSL? (y/n): ')" static
+fi
+
+            if [ "$static_ssl" = "y" ]; then
+                # 静态链接 OpenSSL
+                sed -i 's/^#_ssl/_ssl/g' Modules/Setup
+                sed -i 's/^#_hashlib/_hashlib/g' Modules/Setup
+                sed -i 's/^#\(.*\)-l:libssl.a/\1-l:libssl.a/g' Modules/Setup
+                sed -i 's/^#\(.*\)-l:libcrypto.a/\1-l:libcrypto.a/g' Modules/Setup
+            else
+                # 动态链接 OpenSSL（默认选项）
+                sed -i 's/^#_ssl/_ssl/g' Modules/Setup
+                sed -i 's/^#_hashlib/_hashlib/g' Modules/Setup
+                sed -i 's/^#\(.*\)$(OPENSSL_LIBS)/\1$(OPENSSL_LIBS)/g' Modules/Setup
+            fi
+
+            # 配置Python
+            print_color $YELLOW "配置Python..."
+            if ! ./configure --prefix="$install_dir" --enable-optimizations --with-ensurepip=install --with-openssl=/usr/local/openssl; then
+                print_color $RED "配置Python失败！"
+                exit 1
+            fi
+
+            # 编译Python
+            print_color $YELLOW "编译Python..."
+            if ! make -j "$(nproc)"; then
+                print_color $RED "编译Python失败！"
+                exit 1
+            fi
+
+            # 安装Python
+            print_color $YELLOW "安装Python..."
+            if ! sudo make altinstall; then
+                print_color $RED "安装Python失败！"
+                exit 1
+            fi
+
+            # 清理临时文件
+            rm -rf "/tmp/Python-$version" "/tmp/Python-$version.tgz"
+
+            print_color $GREEN "Python $version 已成功安装到 $install_dir 目录。"
+
+            # 创建快捷方式到/usr/local/bin
+            print_color $YELLOW "创建Python $version 快捷方式到/usr/local/bin..."
+            if [[ $version == 2.* ]]; then
+                link_name="python2"
+            else
+                link_name="python3"
+            fi
+
+            if ! sudo ln -s "$install_dir/bin/$link_name" "/usr/local/bin/python$version"; then
+                print_color $RED "创建快捷方式失败！"
+                exit 1
+            fi
+
+            print_color $GREEN "快捷方式已创建。"
+
+            # 验证SSL支持
+            print_color $YELLOW "验证SSL支持..."
+            if "$install_dir/bin/$link_name" -c "import ssl; print(ssl.OPENSSL_VERSION)"; then
+                print_color $GREEN "SSL 支持已成功启用"
+            else
+                print_color $RED "SSL 支持验证失败，请检查安装"
+                exit 1
+            fi
+
+            print_color $GREEN "安装完成。"
+            ;;
+        2)
+            check_and_update_openssl
+            print_color $GREEN "OpenSSL 安装完成。"
+            ;;
+    esac
+}
+
+# 执行主函数
+main                
