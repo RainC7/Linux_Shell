@@ -181,7 +181,6 @@ install_dependencies() {
     esac
 }
 
-# 检查并更新 OpenSSL
 check_and_update_openssl() {
     print_color $YELLOW "检查 OpenSSL 版本..."
     current_openssl_version=$(openssl version | awk '{print $2}')
@@ -231,6 +230,37 @@ check_and_update_openssl() {
 
     print_color $GREEN "准备安装 OpenSSL $openssl_version ..."
 
+    # 尝试使用 yum 更新
+    if [[ "$OS" == "CentOS Linux" || "$OS" == "Red Hat Enterprise Linux" || "$OS" == "Fedora" ]]; then
+        print_color $YELLOW "尝试使用 yum 更新 OpenSSL..."
+        if sudo yum update -y openssl; then
+            print_color $GREEN "OpenSSL 已通过 yum 成功更新。"
+            check_installed_version
+            return
+        else
+            print_color $YELLOW "无法通过 yum 更新 OpenSSL，将尝试编译安装。"
+        fi
+    fi
+
+    # 如果 yum 更新失败或不是 CentOS/RHEL/Fedora，则进行编译安装
+
+    # 卸载旧版本 OpenSSL（仅适用于 CentOS/RHEL/Fedora）
+    if [[ "$OS" == "CentOS Linux" || "$OS" == "Red Hat Enterprise Linux" || "$OS" == "Fedora" ]]; then
+        sudo yum remove -y openssl
+    fi
+
+    # 安装依赖
+    case $OS in
+        "Ubuntu"|"Debian")
+            sudo apt update && sudo apt upgrade -y
+            sudo apt install -y build-essential checkinstall zlib1g-dev
+            ;;
+        "CentOS Linux"|"Red Hat Enterprise Linux"|"Fedora")
+            sudo yum group install -y 'Development Tools'
+            sudo yum install -y perl-core zlib-devel libtool autoconf automake perl-IPC-Cmd perl-Data-Dumper perl-CPAN
+            ;;
+    esac
+
     # 设置下载链接
     if $USE_CHINA_MIRROR; then
         openssl_url="https://kkgithub.com/openssl/openssl/releases/download/openssl-$openssl_version/openssl-$openssl_version.tar.gz"
@@ -244,44 +274,44 @@ check_and_update_openssl() {
         return 1
     fi
 
-    # 安装依赖
-    case $OS in
-        "Ubuntu"|"Debian")
-            sudo apt update && sudo apt upgrade
-            sudo apt install build-essential checkinstall zlib1g-dev -y
-            ;;
-        "CentOS Linux"|"Red Hat Enterprise Linux"|"Fedora")
-            sudo yum group install 'Development Tools'
-            sudo yum install perl-core zlib-devel -y
-            ;;
-    esac
-
     # 解压和安装 OpenSSL
     cd /tmp
     tar -zxvf openssl-$openssl_version.tar.gz
     cd openssl-$openssl_version
 
     # 配置、编译和安装
-    ./config --prefix=/usr/local/openssl
-    make && sudo make install
+    ./config --prefix=/usr/local/openssl-$openssl_version shared zlib-dynamic enable-ec_nistp_64_gcc_128
+    make && sudo make install_sw
 
     # 配置
     sudo mv /usr/bin/openssl /usr/bin/openssl_old
-    sudo ln -s /usr/local/openssl/bin/openssl /usr/bin/openssl
-    sudo ln -s /usr/local/openssl/lib/libssl.so /usr/local/lib64/libssl.so
-    sudo ln -s /usr/local/openssl/lib/libcrypto.so /usr/local/lib64/libcrypto.so
+    sudo ln -s /usr/local/openssl-$openssl_version/bin/openssl /usr/bin/openssl
+    sudo ln -s /usr/local/openssl-$openssl_version/lib64/libssl.so.3 /usr/lib64/libssl.so.3
+    sudo ln -s /usr/local/openssl-$openssl_version/lib64/libcrypto.so.3 /usr/lib64/libcrypto.so.3
 
     # 配置库文件搜索路径
-    echo '/usr/local/openssl/lib' | sudo tee -a /etc/ld.so.conf
+    echo "/usr/local/openssl-$openssl_version/lib64" | sudo tee -a /etc/ld.so.conf
     sudo ldconfig -v
+
+    # 更新环境变量
+    echo "export PATH=\$PATH:/usr/local/openssl-$openssl_version/bin" | sudo tee -a /etc/profile
+    source /etc/profile
 
     # 清理
     cd /tmp
     rm -rf openssl-$openssl_version openssl-$openssl_version.tar.gz
 
     # 验证安装
+    check_installed_version
+}
+
+check_installed_version() {
     new_openssl_version=$(openssl version | awk '{print $2}')
-    print_color $GREEN "OpenSSL 已更新到新版本: $new_openssl_version"
+    if [[ "$new_openssl_version" == "$openssl_version" ]]; then
+        print_color $GREEN "OpenSSL 已成功更新到新版本: $new_openssl_version"
+    else
+        print_color $RED "OpenSSL 安装失败。当前版本 ($new_openssl_version) 与预期版本 ($openssl_version) 不符。"
+    fi
 }
 
 # 设置下载链接
@@ -302,7 +332,7 @@ main() {
     print_color $CYAN "========================================"
     print_color $CYAN "     Python 和 OpenSSL 一键安装脚本"
     print_color $CYAN "             By Lynn"
-    print_color $CYAN "       Version v2.2-202408240050"
+    print_color $CYAN "            Version 2.3"
     print_color $CYAN "========================================"
 
     print_color $YELLOW "系统信息:"
