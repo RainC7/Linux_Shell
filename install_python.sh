@@ -44,26 +44,88 @@ install_dependencies() {
 # 检查并更新 OpenSSL
 check_and_update_openssl() {
     echo "检查 OpenSSL 版本..."
-    openssl_version=$(openssl version | awk '{print $2}')
-    required_version="1.1.1"
+    current_openssl_version=$(openssl version | awk '{print $2}')
+    required_version="1.1.1"  # 设置最低要求版本
 
-    if [[ "$(printf '%s\n' "$required_version" "$openssl_version" | sort -V | head -n1)" != "$required_version" ]]; then
-        echo "系统 OpenSSL 版本 ($openssl_version) 太旧。正在编译新版本..."
-        
-        wget https://www.openssl.org/source/openssl-1.1.1k.tar.gz
-        tar -xzvf openssl-1.1.1k.tar.gz
-        cd openssl-1.1.1k
-        ./config --prefix=/usr/local/openssl --openssldir=/usr/local/openssl shared zlib
-        make
-        sudo make install
-        cd ..
-        
-        export LD_LIBRARY_PATH=/usr/local/openssl/lib:$LD_LIBRARY_PATH
-        export CPPFLAGS="-I/usr/local/openssl/include"
-        export LDFLAGS="-L/usr/local/openssl/lib"
+    echo "当前 OpenSSL 版本: $current_openssl_version"
+    echo "最低要求版本: $required_version"
+
+    if [[ "$(printf '%s\n' "$required_version" "$current_openssl_version" | sort -V | head -n1)" == "$required_version" ]]; then
+        echo "当前 OpenSSL 版本满足最低要求。"
+        read -p "是否仍要安装新版本的 OpenSSL? (y/n): " install_new_openssl
     else
-        echo "系统 OpenSSL 版本 ($openssl_version) 满足要求。"
+        echo "当前 OpenSSL 版本不满足最低要求。"
+        read -p "是否要安装新版本的 OpenSSL? (y/n): " install_new_openssl
     fi
+
+    if [ "$install_new_openssl" != "y" ]; then
+        echo "保持当前 OpenSSL 版本。"
+        return
+    fi
+
+    echo "OpenSSL 版本选择："
+    echo "1) 最新版本 (3.3.1)"
+    echo "2) 旧版本 (1.1.1i)"
+    echo "3) 自定义版本"
+    read -p "请选择要安装的 OpenSSL 版本 (1/2/3): " openssl_choice
+
+    case $openssl_choice in
+        1)
+            openssl_version="3.3.1"
+            ;;
+        2)
+            openssl_version="1.1.1i"
+            ;;
+        3)
+            read -p "请输入要安装的 OpenSSL 版本 (例如: 3.3.1): " openssl_version
+            ;;
+        *)
+            echo "无效的选择，使用最新版本 3.3.1"
+            openssl_version="3.3.1"
+            ;;
+    esac
+
+    echo "准备安装 OpenSSL $openssl_version ..."
+
+    # 安装依赖
+    case $OS in
+        "Ubuntu"|"Debian")
+            sudo apt update && sudo apt upgrade
+            sudo apt install build-essential checkinstall zlib1g-dev -y
+            ;;
+        "CentOS Linux"|"Red Hat Enterprise Linux"|"Fedora")
+            sudo yum group install 'Development Tools'
+            sudo yum install perl-core zlib-devel -y
+            ;;
+    esac
+
+    # 下载并解压 OpenSSL
+    cd /usr/local/src
+    wget https://www.openssl.org/source/openssl-$openssl_version.tar.gz
+    tar -zxvf openssl-$openssl_version.tar.gz
+    cd openssl-$openssl_version
+
+    # 配置、编译和安装
+    ./config --prefix=/usr/local/openssl
+    make && sudo make install
+
+    # 配置
+    sudo mv /usr/bin/openssl /usr/bin/openssl_old
+    sudo ln -s /usr/local/openssl/bin/openssl /usr/bin/openssl
+    sudo ln -s /usr/local/openssl/lib/libssl.so /usr/local/lib64/libssl.so
+    sudo ln -s /usr/local/openssl/lib/libcrypto.so /usr/local/lib64/libcrypto.so
+
+    # 配置库文件搜索路径
+    echo '/usr/local/openssl/lib' | sudo tee -a /etc/ld.so.conf
+    sudo ldconfig -v
+
+    # 清理
+    cd /usr/local/src
+    rm -rf openssl-$openssl_version openssl-$openssl_version.tar.gz
+
+    # 验证安装
+    new_openssl_version=$(openssl version | awk '{print $2}')
+    echo "OpenSSL 已更新到新版本: $new_openssl_version"
 }
 
 
