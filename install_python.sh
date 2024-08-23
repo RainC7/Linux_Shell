@@ -302,7 +302,7 @@ main() {
     print_color $CYAN "========================================"
     print_color $CYAN "     Python 和 OpenSSL 一键安装脚本"
     print_color $CYAN "             By Lynn"
-    print_color $CYAN "       Version v2.0-202408240032"
+    print_color $CYAN "       Version v2.2-202408240050"
     print_color $CYAN "========================================"
 
     print_color $YELLOW "系统信息:"
