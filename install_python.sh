@@ -21,12 +21,59 @@ print_separator() {
     print_color $CYAN "----------------------------------------"
 }
 
+# 检查网络连接和延迟
+check_network_and_latency() {
+    local host=$1
+    local count=1
+    local timeout=1
+    
+    ping_output=$(ping -c $count -W $timeout $host 2>&1)
+    if [ $? -eq 0 ]; then
+        latency=$(echo "$ping_output" | awk -F'/' 'END {print $5}')
+        latency=${latency%.*}  # 移除小数部分
+        echo "$latency"
+    else
+        echo "-1"
+    fi
+}
+
 # 检查是否在中国大陆
 check_if_in_china() {
-    if curl -s https://ipapi.co/country_code | grep -q 'CN'; then
-        return 0
+    local in_china=false
+    local user_choice=""
+
+    # 尝试使用 ipapi.co 检测
+    local country_code=$(curl -s --connect-timeout 5 https://ipapi.co/country_code)
+    if [ "$country_code" == "CN" ]; then
+        in_china=true
+        print_color $YELLOW "检测到您位于中国大陆。"
+    elif [ -z "$country_code" ]; then
+        # ipapi.co 无法连通，进行 GitHub 和百度的连通性测试
+        local github_latency=$(check_network_and_latency github.com)
+        local baidu_latency=$(check_network_and_latency www.baidu.com)
+
+        if [ $github_latency -eq -1 ] && [ $baidu_latency -ne -1 ] && [ $baidu_latency -lt 100 ]; then
+            in_china=true
+            print_color $YELLOW "当前服务器无法连接至 GitHub，推荐开启中国大陆加速模式。"
+        elif [ $github_latency -eq -1 ]; then
+            print_color $RED "当前可能无法连接到 GitHub，请检查 GitHub 状态。"
+        elif [ $github_latency -ne -1 ] && [ $baidu_latency -ne -1 ] && [ $baidu_latency -lt 100 ]; then
+            in_china=true
+            print_color $YELLOW "检测到您可能位于中国大陆。当前服务器可以连接至 GitHub。"
+        else
+            print_color $GREEN "检测到您可能不在中国大陆。"
+        fi
     else
-        return 1
+        print_color $GREEN "检测到您不在中国大陆。"
+    fi
+
+    print_separator
+    read -p "$(print_color $PURPLE '是否启用中国大陆模式？(y/n): ')" user_choice
+
+    if [[ $user_choice == "y" || $user_choice == "Y" ]]; then
+        return 0  # 启用中国大陆模式
+    else
+        return 1  # 不启用中国大陆模式
     fi
 }
 
@@ -76,18 +123,6 @@ check_ssl_connection() {
         echo -e "${GREEN}正常${NC}"
     else
         echo -e "${RED}异常${NC}"
-    fi
-}
-
-# 检查网络连接
-check_network() {
-    print_color $YELLOW "检查网络连接..."
-    if ping -c 1 www.google.com &> /dev/null || ping -c 1 www.baidu.com &> /dev/null; then
-        print_color $GREEN "网络连接正常"
-        return 0
-    else
-        print_color $RED "网络连接异常"
-        return 1
     fi
 }
 
@@ -197,7 +232,7 @@ check_and_update_openssl() {
     print_color $GREEN "准备安装 OpenSSL $openssl_version ..."
 
     # 设置下载链接
-    if check_if_in_china; then
+    if $USE_CHINA_MIRROR; then
         openssl_url="https://kkgithub.com/openssl/openssl/releases/download/openssl-$openssl_version/openssl-$openssl_version.tar.gz"
     else
         openssl_url="https://github.com/openssl/openssl/releases/download/openssl-$openssl_version/openssl-$openssl_version.tar.gz"
@@ -249,13 +284,25 @@ check_and_update_openssl() {
     print_color $GREEN "OpenSSL 已更新到新版本: $new_openssl_version"
 }
 
+# 设置下载链接
+set_download_url() {
+    local base_url=$1
+    local filename=$2
+    
+    if $USE_CHINA_MIRROR; then
+        echo "https://kkgithub.com/${base_url#https://github.com/}/$filename"
+    else
+        echo "$base_url/$filename"
+    fi
+}
+
 # 主要的脚本逻辑
 main() {
     # 显示系统信息
     print_color $CYAN "========================================"
     print_color $CYAN "     Python 和 OpenSSL 一键安装脚本"
     print_color $CYAN "             By Lynn"
-    print_color $CYAN "       Version v2.0-202408240030"
+    print_color $CYAN "       Version v2.0-202408240032"
     print_color $CYAN "========================================"
 
     print_color $YELLOW "系统信息:"
@@ -264,8 +311,13 @@ main() {
     echo -e "  OpenSSL版本: $(get_openssl_version)"
     echo -e "  SSL连接状态: $(check_ssl_connection)"
     
+    # 检查是否使用中国大陆模式
     if check_if_in_china; then
-        print_color $YELLOW "检测到您可能在中国大陆，将使用替代下载源。"
+        USE_CHINA_MIRROR=true
+        print_color $YELLOW "已启用中国大陆模式，将使用替代下载源。"
+    else
+        USE_CHINA_MIRROR=false
+        print_color $GREEN "未启用中国大陆模式，将使用默认下载源。"
     fi
     echo
 
@@ -298,12 +350,6 @@ main() {
             ;;
     esac
 
-    # 检查网络连接
-    if ! check_network; then
-        print_color $RED "网络连接异常，无法继续安装。请检查您的网络连接后重试。"
-        exit 1
-    fi
-
     # 根据用户选择执行相应的安装流程
     case $install_option in
         1|3)
@@ -323,11 +369,7 @@ main() {
             install_dir="/usr/local/python$version"
 
             # 设置Python安装包下载地址
-            if check_if_in_china; then
-                python_url="https://kkgithub.com/python/cpython/archive/v$version.tar.gz"
-            else
-                python_url="https://github.com/python/cpython/archive/v$version.tar.gz"
-            fi
+            python_url=$(set_download_url "https://github.com/python/cpython/archive" "v$version.tar.gz")
             python_backup_url="https://www.python.org/ftp/python/$version/Python-$version.tgz"
 
             # 下载Python源码包
@@ -352,8 +394,8 @@ main() {
 
             if [ "$install_option" == "3" ]; then
                 print_separator
-                read -p "$(print_color $PURPLE '是否要静态链接 OpenSSL? (y/n): ')" static
-fi
+                read -p "$(print_color $PURPLE '是否要静态链接 OpenSSL? (y/n): ')" static_ssl
+            fi
 
             if [ "$static_ssl" = "y" ]; then
                 # 静态链接 OpenSSL
@@ -428,4 +470,4 @@ fi
 }
 
 # 执行主函数
-main                
+main
