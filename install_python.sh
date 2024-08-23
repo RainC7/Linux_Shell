@@ -230,25 +230,6 @@ check_and_update_openssl() {
 
     print_color $GREEN "准备安装 OpenSSL $openssl_version ..."
 
-    # 尝试使用 yum 更新
-    if [[ "$OS" == "CentOS Linux" || "$OS" == "Red Hat Enterprise Linux" || "$OS" == "Fedora" ]]; then
-        print_color $YELLOW "尝试使用 yum 更新 OpenSSL..."
-        if sudo yum update -y openssl; then
-            print_color $GREEN "OpenSSL 已通过 yum 成功更新。"
-            check_installed_version
-            return
-        else
-            print_color $YELLOW "无法通过 yum 更新 OpenSSL，将尝试编译安装。"
-        fi
-    fi
-
-    # 如果 yum 更新失败或不是 CentOS/RHEL/Fedora，则进行编译安装
-
-    # 卸载旧版本 OpenSSL（仅适用于 CentOS/RHEL/Fedora）
-    if [[ "$OS" == "CentOS Linux" || "$OS" == "Red Hat Enterprise Linux" || "$OS" == "Fedora" ]]; then
-        sudo yum remove -y openssl
-    fi
-
     # 安装依赖
     case $OS in
         "Ubuntu"|"Debian")
@@ -257,7 +238,7 @@ check_and_update_openssl() {
             ;;
         "CentOS Linux"|"Red Hat Enterprise Linux"|"Fedora")
             sudo yum group install -y 'Development Tools'
-            sudo yum install -y perl-core zlib-devel libtool autoconf automake perl-IPC-Cmd perl-Data-Dumper perl-CPAN
+            sudo yum install -y perl-core zlib-devel
             ;;
     esac
 
@@ -265,44 +246,55 @@ check_and_update_openssl() {
     if $USE_CHINA_MIRROR; then
         openssl_url="https://kkgithub.com/openssl/openssl/releases/download/openssl-$openssl_version/openssl-$openssl_version.tar.gz"
     else
-        openssl_url="https://github.com/openssl/openssl/releases/download/openssl-$openssl_version/openssl-$openssl_version.tar.gz"
+        openssl_url="https://www.openssl.org/source/openssl-$openssl_version.tar.gz"
     fi
 
-    # 下载 OpenSSL
-    if ! download_with_retry "$openssl_url" "/tmp/openssl-$openssl_version.tar.gz"; then
+    # 下载 OpenSSL 源码包
+    cd /usr/local/src
+    if ! wget $openssl_url -O openssl-$openssl_version.tar.gz; then
         print_color $RED "下载 OpenSSL 失败，请检查网络连接或稍后重试。"
         return 1
     fi
 
-    # 解压和安装 OpenSSL
-    cd /tmp
-    tar -zxvf openssl-$openssl_version.tar.gz
-    cd openssl-$openssl_version
+    # 解压源码包
+    tar -zxvf openssl-$openssl_version.tar.gz -C /usr/local/src
 
-    # 配置、编译和安装
-    ./config --prefix=/usr/local/openssl-$openssl_version shared zlib-dynamic enable-ec_nistp_64_gcc_128
-    make && sudo make install_sw
+    # 编译配置
+    cd /usr/local/src/openssl-$openssl_version
+    ./config --prefix=/usr/local/openssl
+
+    # 编译和安装
+    make && sudo make install
 
     # 配置
+    # 备份旧 openssl
     sudo mv /usr/bin/openssl /usr/bin/openssl_old
-    sudo ln -s /usr/local/openssl-$openssl_version/bin/openssl /usr/bin/openssl
-    sudo ln -s /usr/local/openssl-$openssl_version/lib64/libssl.so.3 /usr/lib64/libssl.so.3
-    sudo ln -s /usr/local/openssl-$openssl_version/lib64/libcrypto.so.3 /usr/lib64/libcrypto.so.3
 
-    # 配置库文件搜索路径
-    echo "/usr/local/openssl-$openssl_version/lib64" | sudo tee -a /etc/ld.so.conf
+    # 软链新版本的执行命令到 bin 目录中
+    sudo ln -s /usr/local/openssl/bin/openssl /usr/bin/openssl
+
+    # 链接新的库文件
+    sudo ln -s /usr/local/openssl/lib/libssl.so /usr/local/lib64/libssl.so
+    sudo ln -s /usr/local/openssl/lib/libcrypto.so /usr/local/lib64/libcrypto.so
+
+    # 检查链接是否成功
+    strings /usr/local/lib64/libssl.so | grep OpenSSL
+
+    # 配置 openssl 库文件的搜索路径
+    echo '/usr/local/openssl/lib' | sudo tee -a /etc/ld.so.conf
     sudo ldconfig -v
 
-    # 更新环境变量
-    echo "export PATH=\$PATH:/usr/local/openssl-$openssl_version/bin" | sudo tee -a /etc/profile
-    source /etc/profile
-
     # 清理
-    cd /tmp
+    cd /usr/local/src
     rm -rf openssl-$openssl_version openssl-$openssl_version.tar.gz
 
     # 验证安装
-    check_installed_version
+    new_openssl_version=$(openssl version | awk '{print $2}')
+    if [[ "$new_openssl_version" == "$openssl_version" ]]; then
+        print_color $GREEN "OpenSSL 已成功更新到新版本: $new_openssl_version"
+    else
+        print_color $RED "OpenSSL 安装失败。当前版本 ($new_openssl_version) 与预期版本 ($openssl_version) 不符。"
+    fi
 }
 
 check_installed_version() {
@@ -332,7 +324,7 @@ main() {
     print_color $CYAN "========================================"
     print_color $CYAN "     Python 和 OpenSSL 一键安装脚本"
     print_color $CYAN "             By Lynn"
-    print_color $CYAN "            Version 2.3"
+    print_color $CYAN "            Version 2.4"
     print_color $CYAN "========================================"
 
     print_color $YELLOW "系统信息:"
